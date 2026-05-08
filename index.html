@@ -843,7 +843,11 @@ function mergeRemote(remoteRows){
     saveCache();
     updateCounters(); renderLog();
     if(dashReady) updateDash();
-    if(tbReady)   renderTable();
+    if(tbReady){
+      // Actualizar fecha "hasta hoy" para no perder registros recientes
+      document.getElementById('tb-to').value = localDateStr(new Date());
+      renderTable();
+    }
   }
   return changed;
 }
@@ -1316,16 +1320,18 @@ function updateDash(){
 /* ══════════════════════════════════════════
    TABLA
 ══════════════════════════════════════════ */
+// Fecha local correcta sin desfase UTC
+function localDateStr(d){
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
 function initTable(){
-  if(!tbReady){
-    const to=new Date(), from=new Date();
-    from.setDate(from.getDate()-90);   // 90 días para cubrir más registros por defecto
-    // Usar fecha local correcta (no UTC) para evitar desfase de zona horaria
-    const fmt = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-    document.getElementById('tb-from').value = fmt(from);
-    document.getElementById('tb-to').value   = fmt(to);
-    tbReady=true;
-  }
+  // Siempre recalcular fechas al entrar a la pestaña para que "hoy" sea correcto
+  const to=new Date(), from=new Date();
+  from.setDate(from.getDate()-90);
+  document.getElementById('tb-from').value = localDateStr(from);
+  document.getElementById('tb-to').value   = localDateStr(to);
+  tbReady=true;
   renderTable();
 }
 
@@ -1336,14 +1342,23 @@ function setChip(t){
 }
 
 function getFiltered(){
-  const from=document.getElementById('tb-from').value, to=document.getElementById('tb-to').value;
-  const prod=document.getElementById('tb-prod').value, search=document.getElementById('tb-search').value.toLowerCase().trim();
+  const from  = document.getElementById('tb-from').value;
+  const to    = document.getElementById('tb-to').value;
+  const prod  = document.getElementById('tb-prod').value;
+  const search= document.getElementById('tb-search').value.toLowerCase().trim();
+
   return records.filter(r=>{
-    if(tbType!=='all'&&r.type!==tbType)return false;
-    if(from&&r.fecha&&r.fecha<from)return false;
-    if(to&&r.fecha&&r.fecha>to)return false;
-    if(prod&&r.product!==prod)return false;
-    if(search){const h=(r.parte||'')+(r.lote||'')+(r.operador||'')+(r.detail||'');if(!h.toLowerCase().includes(search))return false;}
+    if(tbType!=='all' && r.type!==tbType) return false;
+    // Normalizar fecha del registro por si acaso llegó sin normalizar
+    const fecha = normalizeDate(r.fecha);
+    if(!fecha) return false;
+    if(from && fecha < from) return false;
+    if(to   && fecha > to)   return false;
+    if(prod && r.product !== prod) return false;
+    if(search){
+      const hay = (r.parte||'')+(r.lote||'')+(r.operador||'')+(r.detail||'')+(r.product||'');
+      if(!hay.toLowerCase().includes(search)) return false;
+    }
     return true;
   });
 }
