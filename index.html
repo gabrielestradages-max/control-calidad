@@ -809,42 +809,74 @@ function startSyncWorker(){
 // ── Traer datos remotos (alias para compatibilidad) ──
 async function pullRemote(){ await pullRemoteSilent(); }
 
-// ── Fusionar registros remotos sin duplicar ──
+// ── Fusionar registros remotos — Sheets es la fuente de verdad ──
 function mergeRemote(remoteRows){
-  let changed = false;
-  remoteRows.forEach(row=>{
+  // Filtrar filas válidas con fecha y tipo
+  const valid = remoteRows.filter(row => {
+    const t = (row.type||'').trim();
+    const f = normalizeDate(row.fecha);
+    return ['scrap','rework','release'].includes(t) && f;
+  });
+
+  if(!valid.length) return false;
+
+  // IDs pendientes de sync local (no pisar cambios en vuelo)
+  const pendingIds = new Set(syncQueue.map(q => Number(q.record?.id)).filter(id => id > 0));
+
+  // Mapa remoto por id
+  const remoteMap = new Map();
+  valid.forEach(row => {
     const id = Number(row.id);
-    if(!id) return;
-    const idx = records.findIndex(r=>r.id===id);
-    if(idx===-1){
-      const rec = rowToRecord(row);
+    if(id > 0) remoteMap.set(id, rowToRecord(row));
+  });
+
+  // Actualizar nextId
+  if(remoteMap.size > 0){
+    const maxRemote = Math.max(...remoteMap.keys());
+    if(maxRemote >= nextId) nextId = maxRemote + 1;
+  }
+
+  let changed = false;
+
+  // Agregar / actualizar
+  remoteMap.forEach((rec, id) => {
+    if(pendingIds.has(id)) return;
+    const idx = records.findIndex(r => r.id === id);
+    if(idx === -1){
       records.push(rec);
-      counts[rec.type] = (counts[rec.type]||0)+1;
+      counts[rec.type] = (counts[rec.type]||0) + 1;
       changed = true;
     } else {
-      const rec = rowToRecord(row);
       const old = records[idx];
-      if(JSON.stringify(old)!==JSON.stringify(rec)){
-        if(old.type!==rec.type){ counts[old.type]=Math.max(0,(counts[old.type]||1)-1); counts[rec.type]=(counts[rec.type]||0)+1; }
-        records[idx]=rec; changed=true;
+      if(old.fecha !== rec.fecha || String(old.cantidad) !== String(rec.cantidad) ||
+         old.parte !== rec.parte || old.type !== rec.type || old.detail !== rec.detail){
+        if(old.type !== rec.type){
+          counts[old.type] = Math.max(0, (counts[old.type]||1) - 1);
+          counts[rec.type] = (counts[rec.type]||0) + 1;
+        }
+        records[idx] = rec;
+        changed = true;
       }
     }
   });
-  const remoteIds = new Set(remoteRows.map(r=>Number(r.id)));
-  for(let i=records.length-1;i>=0;i--){
-    const r=records[i];
-    if(r.id && !remoteIds.has(r.id) && !syncQueue.find(q=>q.record?.id===r.id)){
-      counts[r.type]=Math.max(0,(counts[r.type]||1)-1);
-      records.splice(i,1); changed=true;
+
+  // Eliminar locales que ya no existen en remoto
+  for(let i = records.length - 1; i >= 0; i--){
+    const r = records[i];
+    if(r.id > 0 && !remoteMap.has(r.id) && !pendingIds.has(r.id)){
+      counts[r.type] = Math.max(0, (counts[r.type]||1) - 1);
+      records.splice(i, 1);
+      changed = true;
     }
   }
+
   if(changed){
-    records.sort((a,b)=>(b.fecha||'').localeCompare(a.fecha||''));
+    records.sort((a, b) => (b.fecha||'').localeCompare(a.fecha||''));
     saveCache();
-    updateCounters(); renderLog();
+    updateCounters();
+    renderLog();
     if(dashReady) updateDash();
     if(tbReady){
-      // Actualizar fecha "hasta hoy" para no perder registros recientes
       document.getElementById('tb-to').value = localDateStr(new Date());
       renderTable();
     }
@@ -1015,9 +1047,12 @@ function loadFromRemote(rows){
   Object.assign(counts,{scrap:0,rework:0,release:0});
   rows.forEach(row=>{
     const r = rowToRecord(row);
-    if(r.type && r.fecha){ records.push(r); counts[r.type]=(counts[r.type]||0)+1; }
+    if(['scrap','rework','release'].includes(r.type) && r.fecha){
+      records.push(r);
+      counts[r.type] = (counts[r.type]||0) + 1;
+    }
   });
-  nextId = Math.max(0,...records.map(r=>r.id||0)) + 1;
+  nextId = records.length > 0 ? Math.max(...records.map(r=>r.id||0)) + 1 : 1;
   records.sort((a,b)=>(b.fecha||'').localeCompare(a.fecha||''));
   saveCache();
 }
@@ -1030,8 +1065,7 @@ async function pullRemoteSilent(){
     if(!res.ok) return;
     const json = await res.json();
     if(json.status!=='ok'||!Array.isArray(json.records)) return;
-    const changed = mergeRemote(json.records);
-    if(changed) saveCache();
+    mergeRemote(json.records);
     lastSyncOk = new Date();
     updateSyncIndicator('ok');
   } catch(_){ updateSyncIndicator('error'); }
@@ -1342,16 +1376,24 @@ function setChip(t){
 }
 
 function getFiltered(){
-  const from  = document.getElementById('tb-from').value;
-  const to    = document.getElementById('tb-to').value;
-  const prod  = document.getElementById('tb-prod').value;
-  const search= document.getElementById('tb-search').value.toLowerCase().trim();
+  const fromEl = document.getElementById('tb-from');
+  const toEl   = document.getElementById('tb-to');
+  const prodEl = document.getElementById('tb-prod');
+  const srchEl = document.getElementById('tb-search');
+
+  // Si los elementos no existen aún, retornar todo
+  if(!fromEl || !toEl) return [...records];
+
+  const from   = fromEl.value || '';
+  const to     = toEl.value   || '';
+  const prod   = prodEl ? prodEl.value : '';
+  const search = srchEl ? srchEl.value.toLowerCase().trim() : '';
 
   return records.filter(r=>{
     if(tbType!=='all' && r.type!==tbType) return false;
-    // Normalizar fecha del registro por si acaso llegó sin normalizar
     const fecha = normalizeDate(r.fecha);
     if(!fecha) return false;
+    // Solo filtrar por fecha si hay valor en el input
     if(from && fecha < from) return false;
     if(to   && fecha > to)   return false;
     if(prod && r.product !== prod) return false;
