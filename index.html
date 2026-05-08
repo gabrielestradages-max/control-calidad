@@ -477,6 +477,9 @@ body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(
         </div>
       </div>
     </div>
+    <!-- DEBUG PANEL — temporal para diagnóstico -->
+    <div id="dbg-panel" style="background:#1a0a2e;border:1px solid #7c3aed;border-radius:8px;padding:12px 16px;margin-bottom:14px;font-family:'DM Mono',monospace;font-size:11px;color:#c4b5fd;line-height:2;">Esperando datos…</div>
+
     <div class="rtable-wrap">
       <div class="rtable-scroll">
         <table class="rtable">
@@ -1411,6 +1414,22 @@ function sortBy(col){
 }
 
 function renderTable(){
+  // ── DEBUG PANEL ──────────────────────────────
+  const dbg = document.getElementById('dbg-panel');
+  if(dbg){
+    const from  = (document.getElementById('tb-from')||{}).value || '(vacío)';
+    const to    = (document.getElementById('tb-to')||{}).value   || '(vacío)';
+    const total = records.length;
+    const sample = records.slice(0,3).map(r=>`id:${r.id} tipo:${r.type} fecha:${r.fecha}`).join(' | ');
+    dbg.innerHTML = `
+      <b>records.length:</b> ${total} &nbsp;|&nbsp;
+      <b>tbType:</b> ${tbType} &nbsp;|&nbsp;
+      <b>from:</b> ${from} &nbsp;|&nbsp;
+      <b>to:</b> ${to}<br>
+      <b>muestra:</b> ${sample||'(sin registros)'}
+    `;
+  }
+  // ─────────────────────────────────────────────
   const all=getFiltered();
   const tots={scrap:0,rework:0,release:0};
   all.forEach(r=>tots[r.type]+=(parseInt(r.cantidad)||0));
