@@ -848,12 +848,33 @@ function mergeRemote(remoteRows){
   return changed;
 }
 
+// ── Normalizar fecha: acepta '2026-05-08', '2026-05-08T06:00:00.000Z', Date serial, etc. ──
+function normalizeDate(val){
+  if(!val) return '';
+  const s = String(val).trim();
+  // Ya está en formato correcto YYYY-MM-DD
+  if(/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  // ISO completo con T (viene de Sheets cuando la celda es tipo Date)
+  if(s.includes('T')) return s.split('T')[0];
+  // Número serial de Excel/Sheets (días desde 1899-12-30)
+  if(/^\d+(\.\d+)?$/.test(s)){
+    const d = new Date((parseFloat(s) - 25569) * 86400 * 1000);
+    return d.toISOString().split('T')[0];
+  }
+  // Cualquier otro formato parseable
+  try{
+    const d = new Date(s);
+    if(!isNaN(d)) return d.toISOString().split('T')[0];
+  }catch(_){}
+  return s;
+}
+
 function rowToRecord(row){
   return {
     id      : Number(row.id),
     type    : row.type||'scrap',
-    fecha   : row.fecha||'',
-    timestamp:row.timestamp||'',
+    fecha   : normalizeDate(row.fecha),
+    timestamp: row.timestamp||'',
     product : row.product||'',
     model   : row.model||'',
     parte   : row.parte||'',
@@ -1124,6 +1145,10 @@ function saveRecord(type){
     if(!r.parte||!r.cantidad||!r.detail){toast('Completa los campos requeridos (*)','#f5a623');return;}
   }
 
+  // Normalizar fecha al formato YYYY-MM-DD siempre
+  r.fecha = normalizeDate(r.fecha);
+  if(!r.fecha){ toast('La fecha no es válida','#f5a623'); return; }
+
   if(editingRecordId!==null){
     // EDIT
     const idx=records.findIndex(x=>x.id===editingRecordId);
@@ -1293,9 +1318,12 @@ function updateDash(){
 ══════════════════════════════════════════ */
 function initTable(){
   if(!tbReady){
-    const to=new Date(),from=new Date(); from.setDate(from.getDate()-60);
-    document.getElementById('tb-from').value=from.toISOString().split('T')[0];
-    document.getElementById('tb-to').value=to.toISOString().split('T')[0];
+    const to=new Date(), from=new Date();
+    from.setDate(from.getDate()-90);   // 90 días para cubrir más registros por defecto
+    // Usar fecha local correcta (no UTC) para evitar desfase de zona horaria
+    const fmt = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    document.getElementById('tb-from').value = fmt(from);
+    document.getElementById('tb-to').value   = fmt(to);
     tbReady=true;
   }
   renderTable();
