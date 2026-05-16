@@ -961,9 +961,26 @@ function saveUsersLocal(){
 
 /* ── Users: Sheets sync ── */
 function pushUsersToSheets(){
-  // Use the same flushQueue mechanism that works for records
-  // This avoids the 302-redirect issue that drops the POST body on direct fetch
-  enqueue({action:'saveUsers', record:{_users: JSON.parse(JSON.stringify(users))}});
+  if(!GS_URL) return;
+  // Send directly via GET — bypasses the queue to avoid timing issues
+  // Uses GET (not POST) to avoid the 302 redirect that drops the body
+  const encoded = encodeURIComponent(JSON.stringify(users));
+  fetch(GS_URL + '?action=saveUsers&data=' + encoded + '&t=' + Date.now())
+    .then(res => {
+      if(res.ok){
+        toast('✓ Usuarios sincronizados con Sheets','#2ecc71');
+        return pullUsersFromSheets();
+      }
+    })
+    .catch(()=>{
+      // Retry once after 4 seconds
+      setTimeout(()=>{
+        const enc2 = encodeURIComponent(JSON.stringify(users));
+        fetch(GS_URL + '?action=saveUsers&data=' + enc2 + '&t=' + Date.now())
+          .then(res => { if(res.ok){ toast('✓ Usuarios sincronizados','#2ecc71'); pullUsersFromSheets(); } })
+          .catch(()=>{ toast('⚠️ No se pudo sincronizar usuarios con Sheets','#f5a623'); });
+      }, 4000);
+    });
 }
 async function pullUsersFromSheets(){
   if(!GS_URL) return;
@@ -1153,14 +1170,13 @@ async function flushQueue(){
   isSyncing = true;
   updateSyncIndicator('syncing');
 
-  const batch = [...syncQueue];
-
-  // Separate saveUsers ops from record ops
-  const userOps   = batch.filter(op=>op.action==='saveUsers');
-  const recordOps = batch.filter(op=>op.action!=='saveUsers');
+  // Only send record ops through the queue (saveUsers goes direct via pushUsersToSheets)
+  const batch      = [...syncQueue];
+  const recordOps  = batch.filter(op=>op.action!=='saveUsers');
+  // Remove any stale saveUsers ops from queue immediately
+  const staleUsers = batch.filter(op=>op.action==='saveUsers');
 
   try{
-    // ── Send record batch ──
     if(recordOps.length){
       const res = await fetch(GS_URL, {
         method : 'POST',
@@ -1172,20 +1188,15 @@ async function flushQueue(){
       if(json.status !== 'ok') throw new Error(json.message||'Error');
     }
 
-    // ── Send users (use GET with encoded data to avoid 302 POST body loss) ──
-    if(userOps.length){
-      const latestUsers = userOps[userOps.length-1].record._users;
-      const encoded = encodeURIComponent(JSON.stringify(latestUsers));
-      const res2 = await fetch(GS_URL+'?action=saveUsers&data='+encoded+'&t='+Date.now());
-      if(res2.ok) await pullUsersFromSheets();
-    }
-
     syncQueue = syncQueue.slice(batch.length);
     saveSyncQueue();
     syncRetry  = 0;
     lastSyncOk = new Date();
     updateSyncIndicator('ok');
   } catch(err){
+    // On error, remove stale saveUsers ops to avoid blocking queue
+    syncQueue = syncQueue.filter(op=>op.action!=='saveUsers');
+    saveSyncQueue();
     syncRetry++;
     const delay = Math.min(30000, 3000 * Math.pow(2, syncRetry-1));
     updateSyncIndicator('error', err.message);
