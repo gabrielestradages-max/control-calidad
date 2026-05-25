@@ -962,8 +962,14 @@ function saveUsersLocal(){
 /* ── Users: Sheets sync ── */
 function pushUsersToSheets(){
   if(!GS_URL) return;
-  // Exactly the same mechanism as records — goes into the batch POST that already works
-  enqueue({ action:'saveUsers', users: JSON.parse(JSON.stringify(users)) });
+  // Same pattern as pushCatalogoToSheets which already works correctly
+  fetch(GS_URL, {
+    method : 'POST',
+    headers: {'Content-Type':'text/plain'},
+    body   : JSON.stringify({action:'saveUsers', users})
+  }).then(r=>r.json()).then(j=>{
+    if(j.status==='ok') pullUsersFromSheets();
+  }).catch(()=>{});
 }
 async function pullUsersFromSheets(){
   if(!GS_URL) return;
@@ -2087,12 +2093,28 @@ function importExcel(event){
   const reader = new FileReader();
   reader.onload = function(e){
     try{
-      const wb    = XLSX.read(e.target.result, {type:'array'});
-      const ws    = wb.Sheets[wb.SheetNames[0]];
-      const rows  = XLSX.utils.sheet_to_json(ws, {header:1, defval:''});
+      const wb = XLSX.read(e.target.result, {type:'array'});
+
+      // Read ALL sheets — skip the instructions sheet, combine data from Scrap/Retrabajo/Liberación
+      const SKIP = ['instrucciones','📋 instrucciones','instructions'];
+      const dataSheets = wb.SheetNames.filter(n => !SKIP.includes(n.toLowerCase().trim()));
+
+      let rows = [];
+      dataSheets.forEach(name => {
+        const data = XLSX.utils.sheet_to_json(wb.Sheets[name], {header:1, defval:''});
+        if(!data || data.length < 2) return;
+        const hdrs = data[0].map(h=>String(h||'').toLowerCase().trim());
+        // Only process sheets with a recognizable status column
+        if(!hdrs.some(h=>h==='estado'||h==='tipo'||h==='type')) return;
+        if(!rows.length){
+          rows = data; // first valid sheet: include header row
+        } else {
+          rows = rows.concat(data.slice(1)); // subsequent sheets: skip header, just add data
+        }
+      });
 
       if(rows.length < 2){
-        showImportResult([],[],'El archivo está vacío o no tiene datos.');
+        showImportResult([],[],'El archivo está vacío o no tiene datos válidos. Asegúrate de usar la plantilla correcta (hojas: Scrap, Retrabajo, Liberación).');
         return;
       }
 
