@@ -1487,6 +1487,7 @@ function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
 ══════════════════════════════════════════ */
 let dashReady=false, tbReady=false, period='month';
 let sortCol='fecha', sortDir=-1, tbType='all', tbPage=1;
+let pendingImport = [];
 const PG=15;
 
 function gotoPage(name){
